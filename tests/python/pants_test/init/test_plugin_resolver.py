@@ -13,7 +13,6 @@ from textwrap import dedent
 from typing import Dict, Iterable, Sequence
 
 import pytest
-from pex.interpreter import PythonInterpreter
 from pkg_resources import Distribution, Requirement, WorkingSet
 
 from pants.backend.python.util_rules import pex
@@ -29,10 +28,9 @@ from pants.init.options_initializer import create_bootstrap_scheduler
 from pants.init.plugin_resolver import PluginResolver
 from pants.option.options_bootstrapper import OptionsBootstrapper
 from pants.testutil.python_interpreter_selection import (
-    PY_36,
-    PY_37,
-    python_interpreter_path,
-    skip_unless_python36_and_python37_present,
+    PY_38,
+    PY_39,
+    skip_unless_python38_and_python39_present,
 )
 from pants.testutil.rule_runner import EXECUTOR, QueryRule, RuleRunner
 from pants.util.contextutil import temporary_dir
@@ -125,7 +123,7 @@ class Plugin:
 def plugin_resolution(
     rule_runner: RuleRunner,
     *,
-    interpreter: PythonInterpreter | None = None,
+    python_version: str | None = None,
     chroot: str | None = None,
     plugins: Sequence[Plugin] = (),
     requirements: Iterable[str] = (),
@@ -143,7 +141,7 @@ def plugin_resolution(
 
     # Default to resolving with whatever we're currently running with.
     interpreter_constraints = (
-        InterpreterConstraints([f"=={interpreter.identity.version_str}"]) if interpreter else None
+        InterpreterConstraints([f"=={python_version}.*"]) if python_version else None
     )
     artifact_interpreter_constraints = interpreter_constraints or InterpreterConstraints(
         [f"=={'.'.join(map(str, sys.version_info[:3]))}"]
@@ -188,7 +186,7 @@ def plugin_resolution(
         configpath = os.path.join(root_dir, "pants.toml")
         if create_artifacts:
             touch(configpath)
-        args = [f"--pants-config-files=['{configpath}']"]
+        args = ["pants", f"--pants-config-files=['{configpath}']"]
 
         options_bootstrapper = OptionsBootstrapper.create(env=env, args=args, allow_pantsrc=False)
         complete_env = CompleteEnvironmentVars(
@@ -290,23 +288,20 @@ def test_range_deps(rule_runner: RuleRunner) -> None:
         assert "2.26.0" == working_set.find(Requirement.parse("requests")).version
 
 
-@skip_unless_python36_and_python37_present
+@skip_unless_python38_and_python39_present
 def test_exact_requirements_interpreter_change_sdist(rule_runner: RuleRunner) -> None:
     _do_test_exact_requirements_interpreter_change(rule_runner, True)
 
 
-@skip_unless_python36_and_python37_present
+@skip_unless_python38_and_python39_present
 def test_exact_requirements_interpreter_change_bdist(rule_runner: RuleRunner) -> None:
     _do_test_exact_requirements_interpreter_change(rule_runner, False)
 
 
 def _do_test_exact_requirements_interpreter_change(rule_runner: RuleRunner, sdist: bool) -> None:
-    python36 = PythonInterpreter.from_binary(python_interpreter_path(PY_36))
-    python37 = PythonInterpreter.from_binary(python_interpreter_path(PY_37))
-
     with plugin_resolution(
         rule_runner,
-        interpreter=python36,
+        python_version=PY_38,
         plugins=[Plugin("jake", "1.2.3"), Plugin("jane", "3.4.5")],
         sdist=sdist,
     ) as results:
@@ -316,7 +311,7 @@ def _do_test_exact_requirements_interpreter_change(rule_runner: RuleRunner, sdis
         with pytest.raises(ExecutionError):
             with plugin_resolution(
                 rule_runner,
-                interpreter=python37,
+                python_version=PY_39,
                 chroot=chroot,
                 plugins=[Plugin("jake", "1.2.3"), Plugin("jane", "3.4.5")],
             ):
@@ -333,7 +328,7 @@ def _do_test_exact_requirements_interpreter_change(rule_runner: RuleRunner, sdis
         # directly from the still in-tact cache.
         with plugin_resolution(
             rule_runner,
-            interpreter=python36,
+            python_version=PY_38,
             chroot=chroot,
             plugins=[Plugin("jake", "1.2.3"), Plugin("jane", "3.4.5")],
         ) as results2:

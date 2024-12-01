@@ -7,17 +7,22 @@ import re
 from enum import Enum
 
 from pants.backend.adhoc.target_types import (
+    AdhocToolCacheScopeField,
     AdhocToolDependenciesField,
     AdhocToolExecutionDependenciesField,
     AdhocToolExtraEnvVarsField,
     AdhocToolLogOutputField,
+    AdhocToolNamedCachesField,
     AdhocToolOutputDependenciesField,
     AdhocToolOutputDirectoriesField,
     AdhocToolOutputFilesField,
     AdhocToolOutputRootDirField,
+    AdhocToolOutputsMatchMode,
+    AdhocToolPathEnvModifyModeField,
     AdhocToolRunnableDependenciesField,
     AdhocToolTimeoutField,
     AdhocToolWorkdirField,
+    AdhocToolWorkspaceInvalidationSourcesField,
 )
 from pants.backend.shell.subsystems.shell_setup import ShellSetup
 from pants.core.goals.test import RuntimePackageDependenciesField, TestTimeoutField
@@ -374,6 +379,26 @@ class ShellCommandTestDependenciesField(ShellCommandExecutionDependenciesField):
     pass
 
 
+class ShellCommandNamedCachesField(AdhocToolNamedCachesField):
+    pass
+
+
+class ShellCommandWorkspaceInvalidationSourcesField(AdhocToolWorkspaceInvalidationSourcesField):
+    pass
+
+
+class ShellCommandPathEnvModifyModeField(AdhocToolPathEnvModifyModeField):
+    pass
+
+
+class ShellCommandOutputsMatchMode(AdhocToolOutputsMatchMode):
+    pass
+
+
+class ShellCommandCacheScopeField(AdhocToolCacheScopeField):
+    pass
+
+
 class SkipShellCommandTestsField(BoolField):
     alias = "skip_tests"
     default = False
@@ -396,7 +421,12 @@ class ShellCommandTarget(Target):
         ShellCommandToolsField,
         ShellCommandExtraEnvVarsField,
         ShellCommandWorkdirField,
+        ShellCommandNamedCachesField,
         ShellCommandOutputRootDirField,
+        ShellCommandWorkspaceInvalidationSourcesField,
+        ShellCommandPathEnvModifyModeField,
+        ShellCommandOutputsMatchMode,
+        ShellCommandCacheScopeField,
         EnvironmentField,
     )
     help = help_text(
@@ -466,6 +496,7 @@ class ShellCommandTestTarget(Target):
         ShellCommandTimeoutField,
         ShellCommandToolsField,
         ShellCommandExtraEnvVarsField,
+        ShellCommandPathEnvModifyModeField,
         EnvironmentField,
         SkipShellCommandTestsField,
         ShellCommandWorkdirField,

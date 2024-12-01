@@ -2,6 +2,7 @@
 # Licensed under the Apache License, Version 2.0 (see LICENSE).
 
 from enum import Enum
+from types import SimpleNamespace
 from typing import Any, Iterable, List, Optional, Tuple, Union
 
 from pants.base.build_environment import get_buildroot
@@ -14,10 +15,11 @@ from pants.engine.unions import UnionMembership
 from pants.help.help_info_extracter import HelpInfoExtracter, pretty_print_type_hint, to_help_str
 from pants.option.config import Config
 from pants.option.global_options import GlobalOptions, LogLevelOption
-from pants.option.option_types import BoolOption, IntOption, StrListOption
+from pants.option.native_options import NativeOptionParser
+from pants.option.option_types import BoolOption, IntListOption, StrListOption
 from pants.option.options import Options
-from pants.option.parser import Parser
-from pants.option.ranked_value import Rank, RankedValue
+from pants.option.ranked_value import Rank
+from pants.option.registrar import OptionRegistrar
 from pants.option.scope import GLOBAL_SCOPE
 from pants.option.subsystem import Subsystem
 from pants.util.logging import LogLevel
@@ -40,12 +42,6 @@ def test_global_scope():
 
     do_test(["-f"], {"type": bool}, ["-f"], ["-f"])
     do_test(["--foo"], {"type": bool}, ["--[no-]foo"], ["--foo", "--no-foo"])
-    do_test(
-        ["--foo"],
-        {"type": bool, "implicit_value": False},
-        ["--[no-]foo"],
-        ["--foo", "--no-foo"],
-    )
     do_test(["-f", "--foo"], {"type": bool}, ["-f", "--[no-]foo"], ["-f", "--foo", "--no-foo"])
 
     do_test(["--foo"], {}, ["--foo=<str>"], ["--foo"])
@@ -98,27 +94,19 @@ def test_non_global_scope():
         ["--bar-baz-foo", "--no-bar-baz-foo"],
         ["--foo", "--no-foo"],
     )
-    do_test(
-        ["--foo"],
-        {"type": bool, "implicit_value": False},
-        ["--[no-]bar-baz-foo"],
-        ["--bar-baz-foo", "--no-bar-baz-foo"],
-        ["--foo", "--no-foo"],
-    )
 
 
 def test_default() -> None:
     def do_test(args, kwargs, expected_default_str):
-        # Defaults are computed in the parser and added into the kwargs, so we
+        # Defaults are computed in the registrar and added into the kwargs, so we
         # must jump through this hoop in this test.
-        parser = Parser(
-            env={},
-            config=Config.load([]),
-            scope_info=GlobalOptions.get_scope_info(),
+        registrar = OptionRegistrar(
+            scope=GlobalOptions.options_scope,
         )
-        parser.register(*args, **kwargs)
-        oshi = HelpInfoExtracter(parser.scope).get_option_scope_help_info(
-            "description", parser, False, "provider"
+        native_parser = NativeOptionParser([], {}, [], allow_pantsrc=False, include_derivation=True)
+        registrar.register(*args, **kwargs)
+        oshi = HelpInfoExtracter(registrar.scope).get_option_scope_help_info(
+            "description", registrar, native_parser, False, "provider"
         )
         assert oshi.description == "description"
         assert oshi.provider == "provider"
@@ -128,8 +116,6 @@ def test_default() -> None:
 
     do_test(["--foo"], {"type": bool}, "False")
     do_test(["--foo"], {"type": bool, "default": True}, "True")
-    do_test(["--foo"], {"type": bool, "implicit_value": False}, "True")
-    do_test(["--foo"], {"type": bool, "implicit_value": False, "default": False}, "False")
     do_test(["--foo"], {}, "None")
     do_test(["--foo"], {"type": int}, "None")
     do_test(["--foo"], {"type": int, "default": 42}, "42")
@@ -142,7 +128,6 @@ def test_default() -> None:
 
 def test_compute_default():
     def do_test(expected_default: Optional[Any], **kwargs):
-        kwargs["default"] = RankedValue(Rank.HARDCODED, kwargs["default"])
         assert expected_default == HelpInfoExtracter.compute_default(**kwargs)
 
     do_test(False, type=bool, default=False)
@@ -213,13 +198,12 @@ def test_grouping():
         def exp_to_len(exp):
             return int(exp)  # True -> 1, False -> 0.
 
-        parser = Parser(
-            env={},
-            config=Config.load([]),
-            scope_info=GlobalOptions.get_scope_info(),
+        registrar = OptionRegistrar(scope=GlobalOptions.options_scope)
+        native_parser = NativeOptionParser([], {}, [], allow_pantsrc=False, include_derivation=True)
+        registrar.register("--foo", **kwargs)
+        oshi = HelpInfoExtracter("").get_option_scope_help_info(
+            "", registrar, native_parser, False, ""
         )
-        parser.register("--foo", **kwargs)
-        oshi = HelpInfoExtracter("").get_option_scope_help_info("", parser, False, "")
         assert exp_to_len(expected_basic) == len(oshi.basic)
         assert exp_to_len(expected_advanced) == len(oshi.advanced)
 
@@ -228,12 +212,12 @@ def test_grouping():
     do_test({"advanced": True}, expected_advanced=True)
 
 
-def test_get_all_help_info():
+def test_get_all_help_info(tmp_path) -> None:
     class Global(Subsystem):
         options_scope = GLOBAL_SCOPE
         help = help_text("Global options.")
 
-        opt1 = IntOption(default=42, help="Option 1")
+        opt1 = IntListOption(default=[42], help="Option 1")
         # This is special in having a short option `-l`. Make sure it works.
         level = LogLevelOption()
 
@@ -267,14 +251,18 @@ def test_get_all_help_info():
         alias = "baz_library"
         help = "A library of baz-es.\n\nUse it however you like."
 
-        core_fields = [QuxField, QuuxField]
+        core_fields = (QuxField, QuuxField)
 
+    config_path = "pants.test.toml"
+    config_source = SimpleNamespace(path=config_path, content=b"[GLOBAL]\nopt1 = '+[99]'")
     options = Options.create(
-        env={},
-        config=Config.load([]),
+        env={"PANTS_OPT1": "88"},
+        config=Config.load([config_source]),
+        native_options_config_discovery=False,
         known_scope_infos=[Global.get_scope_info(), Foo.get_scope_info(), Bar.get_scope_info()],
         args=["./pants", "--backend-packages=['internal_plugins.releases']"],
         bootstrap_option_values=None,
+        include_derivation=True,
     )
     Global.register_options_on_scope(options, UnionMembership({}))
     Foo.register_options_on_scope(options, UnionMembership({}))
@@ -298,7 +286,12 @@ def test_get_all_help_info():
         UnionMembership({}),
         fake_consumed_scopes_mapper,
         RegisteredTargetTypes({BazLibrary.alias: BazLibrary}),
-        BuildFileSymbolsInfo.from_info((BuildFileSymbolInfo("dummy", rule_info_test),)),
+        BuildFileSymbolsInfo.from_info(
+            (
+                BuildFileSymbolInfo("dummy", rule_info_test),
+                BuildFileSymbolInfo("private", 1, hide_from_help=True),
+            )
+        ),
         bc_builder.create(),
     )
 
@@ -313,20 +306,24 @@ def test_get_all_help_info():
                 "deprecated_scope": None,
                 "basic": (
                     {
-                        "display_args": ("--opt1=<int>",),
-                        "comma_separated_display_args": "--opt1=<int>",
+                        "display_args": ('--opt1="[<int>, <int>, ...]"',),
+                        "comma_separated_display_args": '--opt1="[<int>, <int>, ...]"',
                         "scoped_cmd_line_args": ("--opt1",),
                         "unscoped_cmd_line_args": ("--opt1",),
                         "config_key": "opt1",
                         "env_var": "PANTS_OPT1",
                         "value_history": {
                             "ranked_values": (
-                                {"rank": Rank.NONE, "value": None, "details": None},
-                                {"rank": Rank.HARDCODED, "value": 42, "details": None},
+                                {"rank": Rank.NONE, "value": [], "details": ""},
+                                {
+                                    "rank": Rank.ENVIRONMENT,
+                                    "value": [42, 99, 88],
+                                    "details": "pants.test.toml, env var",
+                                },
                             ),
                         },
-                        "typ": int,
-                        "default": 42,
+                        "typ": list,
+                        "default": [42],
                         "fromfile": False,
                         "help": "Option 1",
                         "deprecation_active": False,
@@ -338,8 +335,8 @@ def test_get_all_help_info():
                         "target_field_name": None,
                     },
                     {
-                        "display_args": ("-l=<LogLevel>", "--level=<LogLevel>"),
-                        "comma_separated_display_args": "-l=<LogLevel>, --level=<LogLevel>",
+                        "display_args": ("-l<LogLevel>", "--level=<LogLevel>"),
+                        "comma_separated_display_args": "-l<LogLevel>, --level=<LogLevel>",
                         "scoped_cmd_line_args": ("-l", "--level"),
                         "unscoped_cmd_line_args": ("-l", "--level"),
                         "config_key": "level",
@@ -385,7 +382,7 @@ def test_get_all_help_info():
                                 {"details": "", "rank": Rank.NONE, "value": []},
                                 {"details": "", "rank": Rank.HARDCODED, "value": []},
                                 {
-                                    "details": "from command-line flag",
+                                    "details": "command-line flag",
                                     "rank": Rank.FLAG,
                                     "value": ["internal_plugins.releases"],
                                 },
@@ -529,7 +526,7 @@ def test_get_all_help_info():
             "construct_scope_foo": {
                 "description": None,
                 "documentation": "A foo.",
-                "input_gets": ("Get(ScopedOptions, Scope, ..)",),
+                "awaitables": ("Get(ScopedOptions, Scope, ..)",),
                 "input_types": (),
                 "name": "construct_scope_foo",
                 "output_type": "Foo",
@@ -538,7 +535,7 @@ def test_get_all_help_info():
             "pants.help.help_info_extracter_test.test_get_all_help_info.rule_info_test": {
                 "description": None,
                 "documentation": "This rule is for testing info extraction only.",
-                "input_gets": (),
+                "awaitables": (),
                 "input_types": ("Foo",),
                 "name": "pants.help.help_info_extracter_test.test_get_all_help_info.rule_info_test",
                 "output_type": "Target",
@@ -546,21 +543,19 @@ def test_get_all_help_info():
             },
         },
         "name_to_api_type_info": {
-            "pants.help.help_info_extracter_test.Foo": {
-                "consumed_by_rules": (
-                    "pants.help.help_info_extracter_test.test_get_all_help_info.rule_info_test",
-                ),
-                "dependents": ("help_info_extracter_test",),
-                "dependencies": ("pants.option.scope",),
-                "documentation": None,
+            "pants.option.scope.Scope": {
+                "consumed_by_rules": (),
+                "dependents": (),
+                "dependencies": (),
+                "documentation": "An options scope.",
                 "is_union": False,
-                "module": "pants.help.help_info_extracter_test",
-                "name": "Foo",
-                "provider": "help_info_extracter_test",
-                "returned_by_rules": ("construct_scope_foo",),
+                "module": "pants.option.scope",
+                "name": "Scope",
+                "provider": ("pants.option.scope",),
+                "returned_by_rules": (),
                 "union_members": (),
                 "union_type": None,
-                "used_in_rules": (),
+                "used_in_rules": ("construct_scope_foo",),
             },
             "pants.engine.target.Target": {
                 "consumed_by_rules": (),
@@ -576,7 +571,7 @@ def test_get_all_help_info():
                 "is_union": False,
                 "module": "pants.engine.target",
                 "name": "Target",
-                "provider": "help_info_extracter_test",
+                "provider": ("help_info_extracter_test",),
                 "returned_by_rules": (
                     "pants.help.help_info_extracter_test.test_get_all_help_info.rule_info_test",
                 ),
@@ -584,19 +579,21 @@ def test_get_all_help_info():
                 "union_type": None,
                 "used_in_rules": (),
             },
-            "pants.option.scope.Scope": {
-                "consumed_by_rules": (),
-                "dependents": (),
-                "dependencies": (),
-                "documentation": "An options scope.",
+            "pants.help.help_info_extracter_test.test_get_all_help_info.<locals>.Foo": {
+                "consumed_by_rules": (
+                    "pants.help.help_info_extracter_test.test_get_all_help_info.rule_info_test",
+                ),
+                "dependents": ("help_info_extracter_test",),
+                "dependencies": ("pants.option.scope",),
+                "documentation": None,
                 "is_union": False,
-                "module": "pants.option.scope",
-                "name": "Scope",
-                "provider": "pants.option.scope",
-                "returned_by_rules": (),
+                "module": "pants.help.help_info_extracter_test",
+                "name": "test_get_all_help_info.<locals>.Foo",
+                "provider": ("help_info_extracter_test",),
+                "returned_by_rules": ("construct_scope_foo",),
                 "union_members": (),
                 "union_type": None,
-                "used_in_rules": ("construct_scope_foo",),
+                "used_in_rules": (),
             },
         },
         "name_to_backend_help_info": {
@@ -632,20 +629,24 @@ def test_get_all_help_info():
         },
         "env_var_to_help_info": {
             "PANTS_OPT1": {
-                "display_args": ("--opt1=<int>",),
-                "comma_separated_display_args": "--opt1=<int>",
+                "display_args": ('--opt1="[<int>, <int>, ...]"',),
+                "comma_separated_display_args": '--opt1="[<int>, <int>, ...]"',
                 "scoped_cmd_line_args": ("--opt1",),
                 "unscoped_cmd_line_args": ("--opt1",),
                 "config_key": "opt1",
                 "env_var": "PANTS_OPT1",
                 "value_history": {
                     "ranked_values": (
-                        {"rank": Rank.NONE, "value": None, "details": None},
-                        {"rank": Rank.HARDCODED, "value": 42, "details": None},
+                        {"rank": Rank.NONE, "value": [], "details": ""},
+                        {
+                            "rank": Rank.ENVIRONMENT,
+                            "value": [42, 99, 88],
+                            "details": "pants.test.toml, env var",
+                        },
                     ),
                 },
-                "typ": int,
-                "default": 42,
+                "typ": list,
+                "default": [42],
                 "fromfile": False,
                 "help": "Option 1",
                 "deprecation_active": False,
@@ -657,8 +658,8 @@ def test_get_all_help_info():
                 "target_field_name": None,
             },
             "PANTS_LEVEL": {
-                "display_args": ("-l=<LogLevel>", "--level=<LogLevel>"),
-                "comma_separated_display_args": "-l=<LogLevel>, --level=<LogLevel>",
+                "display_args": ("-l<LogLevel>", "--level=<LogLevel>"),
+                "comma_separated_display_args": "-l<LogLevel>, --level=<LogLevel>",
                 "scoped_cmd_line_args": ("-l", "--level"),
                 "unscoped_cmd_line_args": ("-l", "--level"),
                 "config_key": "level",
@@ -704,7 +705,7 @@ def test_get_all_help_info():
                         {"details": "", "rank": Rank.NONE, "value": []},
                         {"details": "", "rank": Rank.HARDCODED, "value": []},
                         {
-                            "details": "from command-line flag",
+                            "details": "command-line flag",
                             "rank": Rank.FLAG,
                             "value": ["internal_plugins.releases"],
                         },

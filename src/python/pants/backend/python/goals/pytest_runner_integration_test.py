@@ -51,7 +51,7 @@ from pants.engine.unions import UnionRule
 from pants.testutil.debug_adapter_util import debugadapter_port_for_testing
 from pants.testutil.python_interpreter_selection import (
     all_major_minor_python_versions,
-    skip_unless_python37_and_python39_present,
+    skip_unless_python38_and_python39_present,
 )
 from pants.testutil.python_rule_runner import PythonRuleRunner
 from pants.testutil.rule_runner import QueryRule, mock_console
@@ -188,7 +188,7 @@ def run_pytest_interactive(
 @pytest.mark.platform_specific_behavior
 @pytest.mark.parametrize(
     "major_minor_interpreter",
-    all_major_minor_python_versions(["CPython>=3.7,<4"]),
+    all_major_minor_python_versions(["CPython>=3.8,<4"]),
 )
 def test_passing(rule_runner: PythonRuleRunner, major_minor_interpreter: str) -> None:
     rule_runner.write_files(
@@ -202,7 +202,7 @@ def test_passing(rule_runner: PythonRuleRunner, major_minor_interpreter: str) ->
     )
     assert result.xml_results is not None
     assert result.exit_code == 0
-    assert f"{PACKAGE}/tests.py ." in result.stdout_bytes.decode()
+    assert f"{PACKAGE}/tests.py ." in result.stdout_simplified_str
 
 
 def test_failing(rule_runner: PythonRuleRunner) -> None:
@@ -220,7 +220,7 @@ def test_failing(rule_runner: PythonRuleRunner) -> None:
     tgt = rule_runner.get_target(Address(PACKAGE, relative_file_path="tests.py"))
     result = run_pytest(rule_runner, [tgt])
     assert result.exit_code == 1
-    assert f"{PACKAGE}/tests.py F" in result.stdout_bytes.decode()
+    assert f"{PACKAGE}/tests.py F" in result.stdout_simplified_str
 
 
 def test_dependencies(rule_runner: PythonRuleRunner) -> None:
@@ -278,41 +278,41 @@ def test_dependencies(rule_runner: PythonRuleRunner) -> None:
     tgt = rule_runner.get_target(Address(PACKAGE, relative_file_path="tests.py"))
     result = run_pytest(rule_runner, [tgt])
     assert result.exit_code == 0
-    assert f"{PACKAGE}/tests.py ." in result.stdout_bytes.decode()
+    assert f"{PACKAGE}/tests.py ." in result.stdout_simplified_str
 
 
-@skip_unless_python37_and_python39_present
+@skip_unless_python38_and_python39_present
 def test_uses_correct_python_version(rule_runner: PythonRuleRunner) -> None:
     rule_runner.write_files(
         {
             f"{PACKAGE}/tests.py": dedent(
                 """\
                 def test() -> None:
-                  y = (x := 5)
+                  y = {} | {}
                 """
             ),
             f"{PACKAGE}/BUILD": dedent(
                 """\
-                python_tests(name='py37', interpreter_constraints=['==3.7.*'])
+                python_tests(name='py38', interpreter_constraints=['==3.8.*'])
                 python_tests(name='py39', interpreter_constraints=['==3.9.*'])
                 """
             ),
         }
     )
 
-    py37_tgt = rule_runner.get_target(
-        Address(PACKAGE, target_name="py37", relative_file_path="tests.py")
+    py38_tgt = rule_runner.get_target(
+        Address(PACKAGE, target_name="py38", relative_file_path="tests.py")
     )
-    result = run_pytest(rule_runner, [py37_tgt], test_debug_adapter=False)
-    assert result.exit_code == 2
-    assert b"SyntaxError: invalid syntax" in result.stdout_bytes
+    result = run_pytest(rule_runner, [py38_tgt], test_debug_adapter=False)
+    assert result.exit_code == 1
+    assert b"TypeError: unsupported" in result.stdout_bytes
 
     py39_tgt = rule_runner.get_target(
         Address(PACKAGE, target_name="py39", relative_file_path="tests.py")
     )
     result = run_pytest(rule_runner, [py39_tgt], test_debug_adapter=False)
     assert result.exit_code == 0
-    assert f"{PACKAGE}/tests.py ." in result.stdout_bytes.decode()
+    assert f"{PACKAGE}/tests.py ." in result.stdout_simplified_str
 
 
 def test_passthrough_args(rule_runner: PythonRuleRunner) -> None:
@@ -333,7 +333,7 @@ def test_passthrough_args(rule_runner: PythonRuleRunner) -> None:
     tgt = rule_runner.get_target(Address(PACKAGE, relative_file_path="tests.py"))
     result = run_pytest(rule_runner, [tgt], extra_args=["--pytest-args='-k test_run_me'"])
     assert result.exit_code == 0
-    assert f"{PACKAGE}/tests.py ." in result.stdout_bytes.decode()
+    assert f"{PACKAGE}/tests.py ." in result.stdout_simplified_str
     assert b"collected 2 items / 1 deselected / 1 selected" in result.stdout_bytes
 
 
@@ -474,7 +474,7 @@ def test_extra_output(rule_runner: PythonRuleRunner) -> None:
         ],
     )
     assert result.exit_code == 0
-    assert f"{PACKAGE}/tests.py ." in result.stdout_bytes.decode()
+    assert f"{PACKAGE}/tests.py ." in result.stdout_simplified_str
     assert result.extra_output is not None
     digest_contents = rule_runner.request(DigestContents, [result.extra_output.digest])
     paths = {dc.path for dc in digest_contents}
@@ -494,7 +494,7 @@ def test_coverage(rule_runner: PythonRuleRunner) -> None:
     tgt = rule_runner.get_target(Address(PACKAGE, relative_file_path="tests.py"))
     result = run_pytest(rule_runner, [tgt], extra_args=["--test-use-coverage"])
     assert result.exit_code == 0
-    assert f"{PACKAGE}/tests.py ." in result.stdout_bytes.decode()
+    assert f"{PACKAGE}/tests.py ." in result.stdout_simplified_str
     assert result.coverage_data is not None
 
 
@@ -516,7 +516,7 @@ def test_conftest_dependency_injection(rule_runner: PythonRuleRunner) -> None:
     tgt = rule_runner.get_target(Address(PACKAGE, relative_file_path="tests.py"))
     result = run_pytest(rule_runner, [tgt], extra_args=["--pytest-args='-s'"])
     assert result.exit_code == 0
-    assert f"{PACKAGE}/tests.py In conftest!\n." in result.stdout_bytes.decode()
+    assert f"{PACKAGE}/tests.py In conftest!\n." in result.stdout_simplified_str
 
 
 def test_execution_slot_variable(rule_runner: PythonRuleRunner) -> None:
@@ -539,7 +539,7 @@ def test_execution_slot_variable(rule_runner: PythonRuleRunner) -> None:
     tgt = rule_runner.get_target(Address(PACKAGE, relative_file_path="test_concurrency_slot.py"))
     result = run_pytest(rule_runner, [tgt], extra_args=["--pytest-execution-slot-var=SLOT"])
     assert result.exit_code == 1
-    assert re.search(r"Value of slot is \d+", result.stdout_bytes.decode())
+    assert re.search(r"Value of slot is \d+", result.stdout_simplified_str)
 
 
 def test_extra_env_vars(rule_runner: PythonRuleRunner) -> None:
@@ -671,13 +671,13 @@ class UnusedPlugin(PytestPluginSetupRequest):
 @rule
 async def used_plugin(_: UsedPlugin) -> PytestPluginSetup:
     digest = await Get(Digest, CreateDigest([FileContent("used.txt", b"")]))
-    return PytestPluginSetup(digest=digest)
+    return PytestPluginSetup(digest=digest, extra_sys_path=("sys/path/used",))
 
 
 @rule
 async def unused_plugin(_: UnusedPlugin) -> PytestPluginSetup:
     digest = await Get(Digest, CreateDigest([FileContent("unused.txt", b"")]))
-    return PytestPluginSetup(digest=digest)
+    return PytestPluginSetup(digest=digest, extra_sys_path=("sys/path/unused",))
 
 
 def test_setup_plugins_and_runtime_package_dependency(rule_runner: PythonRuleRunner) -> None:
@@ -700,6 +700,7 @@ def test_setup_plugins_and_runtime_package_dependency(rule_runner: PythonRuleRun
                 f"""\
                 import os.path
                 import subprocess
+                import sys
 
                 def test_embedded_binary():
                     assert os.path.exists("bin.pex")
@@ -710,9 +711,13 @@ def test_setup_plugins_and_runtime_package_dependency(rule_runner: PythonRuleRun
                     # normal dependencies.
                     assert not os.path.exists("{PACKAGE}/say_hello.py")
 
-                def test_additional_plugins():
+                def test_additional_plugins_digest():
                     assert os.path.exists("used.txt")
                     assert not os.path.exists("unused.txt")
+
+                def test_additional_plugins_extra_sys_path():
+                    assert "sys/path/used" in sys.path
+                    assert "sys/path/unused" not in sys.path
                 """
             ),
             f"{PACKAGE}/BUILD": dedent(
@@ -726,7 +731,7 @@ def test_setup_plugins_and_runtime_package_dependency(rule_runner: PythonRuleRun
     )
     tgt = rule_runner.get_target(Address(PACKAGE, relative_file_path="test_binary_call.py"))
     result = run_pytest(rule_runner, [tgt])
-    assert result.exit_code == 0
+    assert result.exit_code == 0, f"pytest test failed:\n{result.stdout_bytes.decode()}"
 
 
 def test_local_dists(rule_runner: PythonRuleRunner) -> None:
@@ -824,7 +829,7 @@ def test_debug_adaptor_request_argv(rule_runner: PythonRuleRunner) -> None:
         "127.0.0.1:5678",
         "-c",
         unittest.mock.ANY,
-        "--color=no",
+        "--color=yes",
         "tests/python/pants_test/test_foo.py",
     )
 
@@ -927,7 +932,7 @@ def test_partition(
 @pytest.mark.platform_specific_behavior
 @pytest.mark.parametrize(
     "major_minor_interpreter",
-    all_major_minor_python_versions(["CPython>=3.7,<4"]),
+    all_major_minor_python_versions(["CPython>=3.8,<4"]),
 )
 def test_batched_passing(rule_runner: PythonRuleRunner, major_minor_interpreter: str) -> None:
     rule_runner.write_files(
@@ -948,7 +953,7 @@ def test_batched_passing(rule_runner: PythonRuleRunner, major_minor_interpreter:
     )
     assert result.xml_results is not None
     assert result.exit_code == 0
-    stdout_text = result.stdout_bytes.decode()
+    stdout_text = result.stdout_simplified_str
     assert f"{PACKAGE}/test_1.py ." in stdout_text
     assert f"{PACKAGE}/test_2.py ." in stdout_text
 
@@ -972,6 +977,6 @@ def test_batched_failing(rule_runner: PythonRuleRunner) -> None:
     )
     result = run_pytest(rule_runner, targets)
     assert result.exit_code == 1
-    stdout_text = result.stdout_bytes.decode()
+    stdout_text = result.stdout_simplified_str
     assert f"{PACKAGE}/test_1.py ." in stdout_text
     assert f"{PACKAGE}/test_2.py F" in stdout_text

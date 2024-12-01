@@ -6,13 +6,15 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import Iterable, Mapping
+from io import StringIO
+from typing import Mapping
 
 from pants.backend.adhoc.target_types import (
     SystemBinaryExtraSearchPathsField,
     SystemBinaryFingerprintArgsField,
     SystemBinaryFingerprintDependenciesField,
     SystemBinaryFingerprintPattern,
+    SystemBinaryLogFingerprintingErrorsField,
     SystemBinaryNameField,
 )
 from pants.build_graph.address import Address
@@ -22,10 +24,11 @@ from pants.core.util_rules.adhoc_process_support import (
     ResolveExecutionDependenciesRequest,
 )
 from pants.core.util_rules.system_binaries import (
-    SEARCH_PATHS,
     BinaryPath,
     BinaryPathRequest,
     BinaryPaths,
+    SearchPath,
+    SystemBinariesSubsystem,
 )
 from pants.engine.internals.native_engine import EMPTY_DIGEST, Digest
 from pants.engine.internals.selectors import Get, MultiGet
@@ -46,6 +49,7 @@ class SystemBinaryFieldSet(RunFieldSet):
         SystemBinaryFingerprintPattern,
         SystemBinaryFingerprintArgsField,
         SystemBinaryFingerprintDependenciesField,
+        SystemBinaryLogFingerprintingErrorsField,
     )
 
     name: SystemBinaryNameField
@@ -53,23 +57,23 @@ class SystemBinaryFieldSet(RunFieldSet):
     fingerprint_pattern: SystemBinaryFingerprintPattern
     fingerprint_argv: SystemBinaryFingerprintArgsField
     fingerprint_dependencies: SystemBinaryFingerprintDependenciesField
+    log_fingerprinting_errors: SystemBinaryLogFingerprintingErrorsField
 
 
 async def _find_binary(
     address: Address,
     binary_name: str,
-    extra_search_paths: Iterable[str],
+    search_path: SearchPath,
     fingerprint_pattern: str | None,
     fingerprint_args: tuple[str, ...] | None,
     fingerprint_dependencies: tuple[str, ...] | None,
+    log_fingerprinting_errors: bool,
 ) -> BinaryPath:
-    search_paths = tuple(extra_search_paths) + SEARCH_PATHS
-
     binaries = await Get(
         BinaryPaths,
         BinaryPathRequest(
             binary_name=binary_name,
-            search_path=search_paths,
+            search_path=search_path,
         ),
     )
 
@@ -106,6 +110,15 @@ async def _find_binary(
 
     for test, binary in zip(tests, binaries.paths):
         if test.exit_code != 0:
+            if log_fingerprinting_errors:
+                logger.warning(
+                    f"Error occurred while fingerprinting candidate binary `{binary.path}` "
+                    f"for binary `{binary_name}` (exit code {test.exit_code}) (use the `{SystemBinaryLogFingerprintingErrorsField.alias}` field to control this warning):\n\n"
+                    f"stdout:\n{test.stdout.decode(errors='ignore')}\n"
+                    f"stderr:\n{test.stderr.decode(errors='ignore')}"
+                )
+
+            # Skip this binary since fingerprinting failed.
             continue
 
         if fingerprint_pattern:
@@ -116,29 +129,50 @@ async def _find_binary(
 
         return binary
 
-    raise ValueError(
-        f"Could not find a binary with name `{binary_name}`"
-        + (
-            ""
-            if not fingerprint_pattern
-            else f" with output matching `{fingerprint_pattern}` when run with arguments `{' '.join(fingerprint_args or ())}`"
+    message = StringIO()
+    message.write(f"Could not find a binary with name `{binary_name}`")
+    if fingerprint_pattern:
+        message.write(
+            f" with output matching `{fingerprint_pattern}` when run with arguments `{' '.join(fingerprint_args or ())}`"
         )
-        + f". The following paths were searched: {', '.join(search_paths)}."
-    )
+
+    message.write(". The following paths were searched:\n")
+    for sp in search_path:
+        message.write(f"- {sp}\n")
+
+    failed_tests = [
+        (test, binary) for test, binary in zip(tests, binaries.paths) if test.exit_code != 0
+    ]
+    if failed_tests:
+        message.write(
+            "\n\nThe following binaries were skipped because each binary returned an error when invoked:"
+        )
+        for failed_test, failed_binary in failed_tests:
+            message.write(f"\n\n- {failed_binary.path} (exit code {failed_test.exit_code})\n")
+            message.write(f"  stdout:\n{failed_test.stdout.decode(errors='ignore')}\n")
+            message.write(f"  stderr:\n{failed_test.stderr.decode(errors='ignore')}\n")
+
+    raise ValueError(message.getvalue())
 
 
 @rule(level=LogLevel.DEBUG)
-async def create_system_binary_run_request(field_set: SystemBinaryFieldSet) -> RunRequest:
+async def create_system_binary_run_request(
+    field_set: SystemBinaryFieldSet,
+    system_binaries: SystemBinariesSubsystem.EnvironmentAware,
+) -> RunRequest:
     assert field_set.name.value is not None
     extra_search_paths = field_set.extra_search_paths.value or ()
+
+    search_path = SearchPath((*extra_search_paths, *system_binaries.system_binary_paths))
 
     path = await _find_binary(
         field_set.address,
         field_set.name.value,
-        extra_search_paths,
+        search_path,
         field_set.fingerprint_pattern.value,
         field_set.fingerprint_argv.value,
         field_set.fingerprint_dependencies.value,
+        field_set.log_fingerprinting_errors.value,
     )
 
     return RunRequest(

@@ -8,10 +8,9 @@ import logging
 import os.path
 from abc import ABC
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Iterable, Mapping, Optional, Tuple
+from typing import Any, ClassVar, Iterable, Literal, Mapping, Optional, Tuple
 
 import yaml
-from typing_extensions import Literal
 
 from pants.backend.project_info import dependencies
 from pants.base.glob_match_error_behavior import GlobMatchErrorBehavior
@@ -684,9 +683,13 @@ async def find_owning_package(request: OwningNodePackageRequest) -> OwningNodePa
 @rule
 async def parse_package_json(content: FileContent) -> PackageJson:
     parsed_package_json = FrozenDict.deep_freeze(json.loads(content.content))
+    package_name = parsed_package_json.get("name")
+    if not package_name:
+        raise ValueError("No package name found in package.json")
+
     return PackageJson(
         content=parsed_package_json,
-        name=parsed_package_json["name"],
+        name=package_name,
         version=parsed_package_json.get("version"),
         snapshot=await Get(Snapshot, PathGlobs([content.path])),
         module=parsed_package_json.get("type"),

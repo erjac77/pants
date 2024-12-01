@@ -22,13 +22,26 @@ from pants.engine.target import (
 from pants.util.strutil import help_text
 
 JS_FILE_EXTENSIONS = (".js", ".cjs", ".mjs")
+JS_TEST_FILE_EXTENSIONS = tuple(f"*.test{ext}" for ext in JS_FILE_EXTENSIONS)
 
 
-class JSDependenciesField(Dependencies):
+class JSRuntimeDependenciesField(Dependencies):
+    """Dependencies of a target that is javascript at runtime."""
+
+
+class JSDependenciesField(JSRuntimeDependenciesField):
     pass
 
 
-class JSSourceField(SingleSourceField):
+class JSRuntimeSourceField(SingleSourceField):
+    """A source that is javascript at runtime."""
+
+
+class JSTestRuntimeSourceField(SingleSourceField):
+    """A source that is runnable by javascript test-runners at runtime."""
+
+
+class JSSourceField(JSRuntimeSourceField):
     expected_file_extensions = JS_FILE_EXTENSIONS
 
 
@@ -60,7 +73,9 @@ class JSSourcesOverridesField(OverridesField):
 
 
 class JSSourcesGeneratorSourcesField(JSGeneratorSourcesField):
-    default = tuple(f"*{ext}" for ext in JS_FILE_EXTENSIONS)
+    default = tuple(f"*{ext}" for ext in JS_FILE_EXTENSIONS) + tuple(
+        f"!{pat}" for pat in JS_TEST_FILE_EXTENSIONS
+    )
     help = generate_multiple_sources_field_help_message(
         "Example: `sources=['utils.js', 'subdir/*.js', '!ignore_me.js']`"
     )
@@ -83,7 +98,7 @@ class JSTestDependenciesField(JSDependenciesField):
     pass
 
 
-class JSTestSourceField(JSSourceField):
+class JSTestSourceField(JSSourceField, JSTestRuntimeSourceField):
     expected_file_extensions = JS_FILE_EXTENSIONS
 
 

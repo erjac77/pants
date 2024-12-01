@@ -11,7 +11,7 @@ import pytest
 from pants.base.exceptions import RuleTypeError
 from pants.engine.internals.rule_visitor import collect_awaitables
 from pants.engine.internals.selectors import Get, GetParseError, MultiGet
-from pants.engine.rules import rule_helper
+from pants.engine.rules import implicitly, rule
 from pants.util.strutil import softwrap
 
 # The visitor inspects the module for definitions.
@@ -20,24 +20,20 @@ INT = int
 BOOL = bool
 
 
-@rule_helper
 async def _top_helper(arg1):
     a = await Get(STR, INT, arg1)
     return await _helper_helper(a)
 
 
-@rule_helper
 async def _helper_helper(arg1):
     return await Get(INT, STR, arg1)
 
 
 class HelperContainer:
-    @rule_helper
     async def _method_helper(self):
         return await Get(STR, INT, 42)
 
     @staticmethod
-    @rule_helper
     async def _static_helper():
         a = await Get(STR, INT, 42)
         return await _helper_helper(a)
@@ -126,6 +122,58 @@ def test_get_no_index_call_no_subject_call_allowed() -> None:
         get_type: type = Get  # noqa: F841
 
     assert_awaitables(rule, [])
+
+
+def test_byname() -> None:
+    @rule
+    def rule1(arg: int) -> int:
+        return arg
+
+    @rule
+    async def rule2() -> int:
+        return 2
+
+    async def rule3() -> int:
+        one_explicit = await rule1(1)
+        one_implicit = await rule1(**implicitly(int(1)))
+        two = await rule2()
+        return one_explicit + one_implicit + two
+
+    assert_awaitables(rule3, [(int, []), (int, int), (int, [])])
+
+
+def test_byname_recursion() -> None:
+    # Note that it's important that the rule is defined inside this function, so that
+    # the @rule decorator is evaluated at test runtime, and not test file parse time.
+    @rule
+    async def recursive_rule(arg: int) -> int:
+        if arg == 0:
+            return 0
+        recursive = await recursive_rule(arg - 1)
+        return recursive
+
+    assert_awaitables(recursive_rule, [(int, [])])
+
+
+@pytest.mark.xfail(
+    reason="We don't yet support mutual recursion via call-by-name.",
+    run=False,
+)
+def test_byname_mutual_recursion() -> None:
+    @rule
+    async def mutually_recursive_rule_1(arg: str) -> int:
+        if arg == "0":
+            return 0
+        recursive = await mutually_recursive_rule_2(int(arg) - 1)
+        return int(recursive)
+
+    @rule
+    async def mutually_recursive_rule_2(arg: int) -> str:
+        recursive = await mutually_recursive_rule_1(str(arg - 1))
+        return str(recursive)
+
+    assert_awaitables(mutually_recursive_rule_1, [(str, [])])
+    assert_awaitables(mutually_recursive_rule_2, [(int, [])])
 
 
 def test_rule_helpers_free_functions() -> None:

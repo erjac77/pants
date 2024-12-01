@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
+import os.path
 from dataclasses import dataclass
 from typing import Iterable, List, Mapping, Optional, Tuple
 
@@ -11,6 +13,7 @@ from pants.backend.python.subsystems.python_native_code import PythonNativeCodeS
 from pants.backend.python.subsystems.setup import PythonSetup
 from pants.backend.python.util_rules import pex_environment
 from pants.backend.python.util_rules.pex_environment import PexEnvironment, PexSubsystem
+from pants.core.goals.resolves import ExportableTool
 from pants.core.util_rules import adhoc_binaries, external_tool
 from pants.core.util_rules.adhoc_binaries import PythonBuildStandaloneBinary
 from pants.core.util_rules.external_tool import (
@@ -23,21 +26,37 @@ from pants.engine.internals.selectors import MultiGet
 from pants.engine.platform import Platform
 from pants.engine.process import Process, ProcessCacheScope
 from pants.engine.rules import Get, collect_rules, rule
+from pants.engine.unions import UnionRule
 from pants.option.global_options import GlobalOptions, ca_certs_path_to_file_content
+from pants.option.option_types import ArgsListOption
 from pants.util.frozendict import FrozenDict
 from pants.util.logging import LogLevel
 from pants.util.meta import classproperty
-from pants.util.strutil import create_path_env_var
+from pants.util.strutil import softwrap
+
+logger = logging.getLogger(__name__)
 
 
 class PexCli(TemplatedExternalTool):
     options_scope = "pex-cli"
     name = "pex"
-    help = "The PEX (Python EXecutable) tool (https://github.com/pantsbuild/pex)."
+    help = "The PEX (Python EXecutable) tool (https://github.com/pex-tool/pex)."
 
-    default_version = "v2.1.137"
-    default_url_template = "https://github.com/pantsbuild/pex/releases/download/{version}/pex"
-    version_constraints = ">=2.1.135,<3.0"
+    default_version = "v2.20.3"
+    default_url_template = "https://github.com/pex-tool/pex/releases/download/{version}/pex"
+    version_constraints = ">=2.13.0,<3.0"
+
+    # extra args to be passed to the pex tool; note that they
+    # are going to apply to all invocations of the pex tool.
+    global_args = ArgsListOption(
+        example="--check=error --no-compile",
+        extra_help=softwrap(
+            """
+            Note that these apply to all invocations of the pex tool, including building `pex_binary`
+            targets, preparing `python_test` targets to run, and generating lockfiles.
+            """
+        ),
+    )
 
     @classproperty
     def default_known_versions(cls):
@@ -46,8 +65,8 @@ class PexCli(TemplatedExternalTool):
                 (
                     cls.default_version,
                     plat,
-                    "faad51a6a108fba9d40b2a10e82a2646fccbaf8c3d9be47818f4bffae02d94b8",
-                    "4098329",
+                    "0100c2e0b9e5dd56b063c98176cdd11b6064c2439d0faefdd3d25453393ed9fb",
+                    "4315782",
                 )
             )
             for plat in ["macos_arm64", "macos_x86_64", "linux_x86_64", "linux_arm64"]
@@ -120,6 +139,7 @@ async def setup_pex_cli_process(
     python_native_code: PythonNativeCodeSubsystem.EnvironmentAware,
     global_options: GlobalOptions,
     pex_subsystem: PexSubsystem,
+    pex_cli_subsystem: PexCli,
     python_setup: PythonSetup,
 ) -> Process:
     tmpdir = ".tmp"
@@ -138,7 +158,7 @@ async def setup_pex_cli_process(
     input_digest = await Get(Digest, MergeDigests(digests_to_merge))
 
     global_args = [
-        # Ensure Pex and its subprocesses create temporary files in the the process execution
+        # Ensure Pex and its subprocesses create temporary files in the process execution
         # sandbox. It may make sense to do this generally for Processes, but in the short term we
         # have known use cases where /tmp is too small to hold large wheel downloads Pex is asked to
         # perform. Making the TMPDIR local to the sandbox allows control via
@@ -156,12 +176,14 @@ async def setup_pex_cli_process(
 
     verbosity_args = [f"-{'v' * pex_subsystem.verbosity}"] if pex_subsystem.verbosity > 0 else []
 
+    warnings_args = [] if pex_subsystem.emit_warnings else ["--no-emit-warnings"]
+
     # NB: We should always pass `--python-path`, as that tells Pex where to look for interpreters
     # when `--python` isn't an absolute path.
     resolve_args = [
         *cert_args,
         "--python-path",
-        create_path_env_var(pex_env.interpreter_search_paths),
+        os.pathsep.join(pex_env.interpreter_search_paths),
     ]
     # All old-style pex runs take the --pip-version flag, but only certain subcommands of the
     # `pex3` console script do. So if invoked with a subcommand, the caller must selectively
@@ -171,8 +193,10 @@ async def setup_pex_cli_process(
         *request.subcommand,
         *global_args,
         *verbosity_args,
+        *warnings_args,
         *pip_version_args,
         *resolve_args,
+        *pex_cli_subsystem.global_args,
         # NB: This comes at the end because it may use `--` passthrough args, # which must come at
         # the end.
         *request.extra_args,
@@ -183,7 +207,7 @@ async def setup_pex_cli_process(
     env = {
         **complete_pex_env.environment_dict(python=bootstrap_python),
         **python_native_code.subprocess_env_vars,
-        **(request.extra_env or {}),
+        **(request.extra_env or {}),  # type: ignore[dict-item]
         # If a subcommand is used, we need to use the `pex3` console script.
         **({"PEX_SCRIPT": "pex3"} if request.subcommand else {}),
     }
@@ -202,10 +226,20 @@ async def setup_pex_cli_process(
     )
 
 
+def maybe_log_pex_stderr(stderr: bytes, pex_verbosity: int) -> None:
+    """Forward Pex's stderr to a Pants logger if conditions are met."""
+    log_output = stderr.decode()
+    if log_output and "PEXWarning:" in log_output:
+        logger.warning("%s", log_output)
+    elif log_output and pex_verbosity > 0:
+        logger.info("%s", log_output)
+
+
 def rules():
     return [
         *collect_rules(),
         *external_tool.rules(),
         *pex_environment.rules(),
         *adhoc_binaries.rules(),
+        UnionRule(ExportableTool, PexCli),
     ]

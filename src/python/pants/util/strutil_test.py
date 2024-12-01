@@ -9,6 +9,7 @@ import pytest
 
 from pants.util.frozendict import FrozenDict
 from pants.util.strutil import (
+    Simplifier,
     bullet_list,
     comma_separated_list,
     docstring,
@@ -112,6 +113,35 @@ def test_strip_chroot_path() -> None:
     # Confirm we can handle values with no chroot path.
     assert strip_v2_chroot_path("") == ""
     assert strip_v2_chroot_path("hello world") == "hello world"
+
+    # Confirm other data (e.g. URLS) is unaffected
+    assert (
+        strip_v2_chroot_path("https://pantsbuild.org and /private/tmp/pants-sandbox-uPH7bl/sandbox")
+        == "https://pantsbuild.org and sandbox"
+    )
+    assert (
+        strip_v2_chroot_path(
+            "{'URL': 'https://pantsbuild.org', 'VENV': '/tmp/q_dt/pants-sandbox-K3/.cache/pex'}"
+        )
+        == "{'URL': 'https://pantsbuild.org', 'VENV': '.cache/pex'}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("strip_chroot_path", "strip_formatting", "expected"),
+    [
+        (False, False, "\033[0;31m/var/pants-sandbox-123/red/path.py\033[0m \033[1mbold\033[0m"),
+        (False, True, "/var/pants-sandbox-123/red/path.py bold"),
+        (True, False, "\033[0;31mred/path.py\033[0m \033[1mbold\033[0m"),
+        (True, True, "red/path.py bold"),
+    ],
+)
+def test_simplifier(strip_chroot_path: bool, strip_formatting: bool, expected: str) -> None:
+    simplifier = Simplifier(strip_chroot_path=strip_chroot_path, strip_formatting=strip_formatting)
+    result = simplifier.simplify(
+        b"\033[0;31m/var/pants-sandbox-123/red/path.py\033[0m \033[1mbold\033[0m"
+    )
+    assert result == expected
 
 
 def test_hard_wrap() -> None:

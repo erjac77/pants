@@ -19,6 +19,7 @@ from pants.backend.python.util_rules.python_sources import (
     PythonSourceFiles,
     PythonSourceFilesRequest,
 )
+from pants.core.goals.resolves import ExportableTool
 from pants.core.goals.test import (
     ConsoleCoverageReport,
     CoverageData,
@@ -106,7 +107,7 @@ class CoverageReportType(Enum):
 
 class CoverageSubsystem(PythonToolBase):
     options_scope = "coverage-py"
-    help = "Configuration for Python test coverage measurement."
+    help_short = "Configuration for Python test coverage measurement."
 
     default_main = ConsoleScript("coverage")
     default_requirements = ["coverage[toml]>=6.5,<8"]
@@ -120,6 +121,9 @@ class CoverageSubsystem(PythonToolBase):
             """
             A list of Python modules or filesystem paths to use in the coverage report, e.g.
             `['helloworld_test', 'helloworld/util/dirutil']`.
+
+            For including files without any test in coverage calculation pass paths instead of modules.
+            Paths need to be relative to the `pants.toml`.
 
             Both modules and directory paths are recursive: any submodules or child paths,
             respectively, will be included.
@@ -147,7 +151,7 @@ class CoverageSubsystem(PythonToolBase):
         help=lambda cls: softwrap(
             f"""
             Path to an INI or TOML config file understood by coverage.py
-            (https://coverage.readthedocs.io/en/stable/config.html).
+            (https://coverage.readthedocs.io/en/latest/config.html).
 
             Setting this option will disable `[{cls.options_scope}].config_discovery`. Use
             this option if the config is located in a non-standard location.
@@ -313,6 +317,23 @@ def get_branch_value_from_config(fc: FileContent) -> bool:
     return cp.getboolean(run_section, "branch", fallback=False)
 
 
+def get_namespace_value_from_config(fc: FileContent) -> bool:
+    if PurePath(fc.path).suffix == ".toml":
+        all_config = _parse_toml_config(fc)
+        return bool(
+            all_config.get("tool", {})
+            .get("coverage", {})
+            .get("report", {})
+            .get("include_namespace_packages", False)
+        )
+
+    cp = _parse_ini_config(fc)
+    report_section = "coverage:report" if fc.path in ("tox.ini", "setup.cfg") else "report"
+    if not cp.has_section(report_section):
+        return False
+    return cp.getboolean(report_section, "include_namespace_packages", fallback=False)
+
+
 @rule
 async def create_or_update_coverage_config(coverage: CoverageSubsystem) -> CoverageConfig:
     config_files = await Get(ConfigFiles, ConfigFilesRequest, coverage.config_request)
@@ -357,10 +378,6 @@ async def merge_coverage_data(
     coverage: CoverageSubsystem,
     source_roots: AllSourceRoots,
 ) -> MergedCoverageData:
-    if len(data_collection) == 1 and not coverage.global_report:
-        coverage_data = data_collection[0]
-        return MergedCoverageData(coverage_data.digest, coverage_data.addresses)
-
     coverage_digest_gets = []
     coverage_data_file_paths = []
     addresses: list[Address] = []
@@ -374,24 +391,36 @@ async def merge_coverage_data(
         coverage_data_file_paths.append(f"{path_prefix}/.coverage")
         addresses.extend(data.addresses)
 
-    if coverage.global_report:
+    if coverage.global_report or coverage.filter:
         # It's important to set the `branch` value in the empty base report to the value it will
         # have when running on real inputs, so that the reports are of the same type, and can be
         # merged successfully. Otherwise we may get "Can't combine arc data with line data" errors.
         # See https://github.com/pantsbuild/pants/issues/14542 .
         config_contents = await Get(DigestContents, Digest, coverage_config.digest)
         branch = get_branch_value_from_config(config_contents[0]) if config_contents else False
+        namespace_packages = (
+            get_namespace_value_from_config(config_contents[0]) if config_contents else False
+        )
         global_coverage_base_dir = PurePath("__global_coverage__")
         global_coverage_config_path = global_coverage_base_dir / "pyproject.toml"
+
+        if coverage.filter:
+            source = list(coverage.filter)
+        else:
+            source = [source_root.path for source_root in source_roots]
+
         global_coverage_config_content = toml.dumps(
             {
                 "tool": {
                     "coverage": {
                         "run": {
                             "relative_files": True,
-                            "source": [source_root.path for source_root in source_roots],
+                            "source": source,
                             "branch": branch,
-                        }
+                        },
+                        "report": {
+                            "include_namespace_packages": namespace_packages,
+                        },
                     }
                 }
             }
@@ -458,7 +487,7 @@ async def merge_coverage_data(
     )
     return MergedCoverageData(
         await Get(Digest, MergeDigests((result.output_digest, extra_sources_digest))),
-        tuple(addresses),
+        tuple(sorted(addresses)),
     )
 
 
@@ -477,12 +506,11 @@ async def generate_coverage_reports(
     )
     sources = await Get(
         PythonSourceFiles,
-        # Coverage sometimes includes non-Python files in its `.coverage` data. We need to
-        # ensure that they're present when generating the report. We include all the files included
-        # by `pytest_runner.py`.
-        PythonSourceFilesRequest(
-            transitive_targets.closure, include_files=True, include_resources=True
-        ),
+        # Coverage sometimes includes non-Python files in its `.coverage` data, so we
+        # include resources here. We don't include files because relocated_files targets
+        # may cause digest merge collisions. So anything you compute coverage over must
+        # be a source file or a resource.
+        PythonSourceFilesRequest(transitive_targets.closure, include_resources=True),
     )
     input_digest = await Get(
         Digest,
@@ -599,4 +627,5 @@ def rules():
     return [
         *collect_rules(),
         UnionRule(CoverageDataCollection, PytestCoverageDataCollection),
+        UnionRule(ExportableTool, CoverageSubsystem),
     ]

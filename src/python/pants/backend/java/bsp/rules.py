@@ -9,6 +9,7 @@ from pants.base.build_root import BuildRoot
 from pants.bsp.protocol import BSPHandlerMapping
 from pants.bsp.spec.base import BuildTargetIdentifier
 from pants.bsp.util_rules.lifecycle import BSPLanguageSupport
+from pants.bsp.util_rules.queries import compute_handler_query_rules
 from pants.bsp.util_rules.targets import (
     BSPBuildTargetsMetadataRequest,
     BSPBuildTargetsMetadataResult,
@@ -95,8 +96,9 @@ async def handle_bsp_java_options_request(
             target=request.bsp_target_id,
             options=(),
             classpath=(),
+            # TODO: Why is this hardcoded and not under pants_workdir?
             class_directory=build_root.pathlib_path.joinpath(
-                f".pants.d/bsp/{jvm_classes_directory(request.bsp_target_id)}"
+                ".pants.d", "bsp", jvm_classes_directory(request.bsp_target_id)
             ).as_uri(),
         )
     )
@@ -148,7 +150,7 @@ async def bsp_java_resources_request(
 
 
 def rules():
-    return (
+    base_rules = (
         *collect_rules(),
         *jvm_compile_rules(),
         *jvm_resources_rules(),
@@ -158,3 +160,4 @@ def rules():
         UnionRule(BSPCompileRequest, JavaBSPCompileRequest),
         UnionRule(BSPResourcesRequest, JavaBSPResourcesRequest),
     )
+    return (*base_rules, *compute_handler_query_rules(base_rules))

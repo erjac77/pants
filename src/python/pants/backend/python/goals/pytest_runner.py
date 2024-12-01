@@ -28,7 +28,13 @@ from pants.backend.python.util_rules.lockfile_metadata import (
     PythonLockfileMetadataV2,
     PythonLockfileMetadataV3,
 )
-from pants.backend.python.util_rules.pex import Pex, PexRequest, ReqStrings, VenvPex, VenvPexProcess
+from pants.backend.python.util_rules.pex import (
+    Pex,
+    PexRequest,
+    PexRequirementsInfo,
+    VenvPex,
+    VenvPexProcess,
+)
 from pants.backend.python.util_rules.pex_from_targets import RequirementsPexRequest
 from pants.backend.python.util_rules.pex_requirements import PexRequirements
 from pants.backend.python.util_rules.python_sources import (
@@ -67,10 +73,11 @@ from pants.engine.fs import (
     Snapshot,
 )
 from pants.engine.process import (
-    FallibleProcessResult,
     InteractiveProcess,
     Process,
     ProcessCacheScope,
+    ProcessResultWithRetries,
+    ProcessWithRetries,
 )
 from pants.engine.rules import Get, MultiGet, collect_rules, rule
 from pants.engine.target import (
@@ -85,6 +92,7 @@ from pants.option.global_options import GlobalOptions
 from pants.util.docutil import doc_url
 from pants.util.frozendict import FrozenDict
 from pants.util.logging import LogLevel
+from pants.util.ordered_set import OrderedSet
 from pants.util.pip_requirement import PipRequirement
 from pants.util.strutil import softwrap
 
@@ -105,6 +113,7 @@ class PytestPluginSetup:
     """
 
     digest: Digest = EMPTY_DIGEST
+    extra_sys_path: tuple[str, ...] = ()
 
 
 @union(in_scope_types=[EnvironmentName])
@@ -218,7 +227,9 @@ def _count_pytest_tests(contents: DigestContents) -> int:
 async def validate_pytest_cov_included(_pytest: PyTest):
     if _pytest.requirements:
         # We'll only be using this subset of the lockfile.
-        req_strings = (await Get(ReqStrings, PexRequirements(_pytest.requirements))).req_strings
+        req_strings = (
+            await Get(PexRequirementsInfo, PexRequirements(_pytest.requirements))
+        ).req_strings
         requirements = {PipRequirement.parse(req_string) for req_string in req_strings}
     else:
         # We'll be using the entire lockfile.
@@ -234,7 +245,7 @@ async def validate_pytest_cov_included(_pytest: PyTest):
                 `{_pytest.install_from_resolve}` used to install pytest is missing
                 `pytest-cov`, which is needed to collect coverage data.
 
-                See {doc_url("python-test-goal#pytest-version-and-plugins")} for details
+                See {doc_url("docs/python/goals/test#pytest-version-and-plugins")} for details
                 on how to set up a custom resolve for use by pytest.
                 """
             )
@@ -249,7 +260,6 @@ async def setup_pytest_for_target(
     coverage_config: CoverageConfig,
     coverage_subsystem: CoverageSubsystem,
     test_extra_env: TestExtraEnv,
-    global_options: GlobalOptions,
 ) -> TestSetup:
     addresses = tuple(field_set.address for field_set in request.field_sets)
 
@@ -303,7 +313,6 @@ async def setup_pytest_for_target(
         LocalDistsPex,
         LocalDistsPexRequest(
             addresses,
-            internal_only=True,
             interpreter_constraints=interpreter_constraints,
             sources=prepared_sources,
         ),
@@ -355,7 +364,11 @@ async def setup_pytest_for_target(
     # Don't forget to keep "Customize Pytest command line options per target" section in
     # docs/markdown/Python/python-goals/python-test-goal.md up to date when changing
     # which flags are added to `pytest_args`.
-    pytest_args = [f"--color={'yes' if global_options.colors else 'no'}"]
+    pytest_args = [
+        # Always include colors and strip them out for display below (if required), for better cache
+        # hit rates
+        "--color=yes"
+    ]
     output_files = []
 
     results_file_name = None
@@ -393,8 +406,14 @@ async def setup_pytest_for_target(
             )
         )
 
+    extra_sys_path = OrderedSet(
+        (
+            *prepared_sources.source_roots,
+            *(entry for plugin_setup in plugin_setups for entry in plugin_setup.extra_sys_path),
+        )
+    )
     extra_env = {
-        "PEX_EXTRA_SYS_PATH": ":".join(prepared_sources.source_roots),
+        "PEX_EXTRA_SYS_PATH": ":".join(extra_sys_path),
         **request.extra_env,
         **test_extra_env.env,
         # NOTE: field_set_extra_env intentionally after `test_extra_env` to allow overriding within
@@ -501,11 +520,17 @@ async def partition_python_tests(
 async def run_python_tests(
     batch: PyTestRequest.Batch[PythonTestFieldSet, TestMetadata],
     test_subsystem: TestSubsystem,
+    global_options: GlobalOptions,
 ) -> TestResult:
     setup = await Get(
         TestSetup, TestSetupRequest(batch.elements, batch.partition_metadata, is_debug=False)
     )
-    result = await Get(FallibleProcessResult, Process, setup.process)
+
+    results = await Get(
+        ProcessResultWithRetries,
+        ProcessWithRetries(setup.process, test_subsystem.attempts_default),
+    )
+    last_result = results.last
 
     def warning_description() -> str:
         description = batch.elements[0].address.spec
@@ -518,7 +543,7 @@ async def run_python_tests(
     coverage_data = None
     if test_subsystem.use_coverage:
         coverage_snapshot = await Get(
-            Snapshot, DigestSubset(result.output_digest, PathGlobs([".coverage"]))
+            Snapshot, DigestSubset(last_result.output_digest, PathGlobs([".coverage"]))
         )
         if coverage_snapshot.files == (".coverage",):
             coverage_data = PytestCoverageData(
@@ -530,24 +555,25 @@ async def run_python_tests(
     xml_results_snapshot = None
     if setup.results_file_name:
         xml_results_snapshot = await Get(
-            Snapshot, DigestSubset(result.output_digest, PathGlobs([setup.results_file_name]))
+            Snapshot, DigestSubset(last_result.output_digest, PathGlobs([setup.results_file_name]))
         )
         if xml_results_snapshot.files != (setup.results_file_name,):
             logger.warning(f"Failed to generate JUnit XML data for {warning_description()}.")
     extra_output_snapshot = await Get(
-        Snapshot, DigestSubset(result.output_digest, PathGlobs([f"{_EXTRA_OUTPUT_DIR}/**"]))
+        Snapshot, DigestSubset(last_result.output_digest, PathGlobs([f"{_EXTRA_OUTPUT_DIR}/**"]))
     )
     extra_output_snapshot = await Get(
         Snapshot, RemovePrefix(extra_output_snapshot.digest, _EXTRA_OUTPUT_DIR)
     )
 
     return TestResult.from_batched_fallible_process_result(
-        result,
+        results.results,
         batch=batch,
         output_setting=test_subsystem.output,
         coverage_data=coverage_data,
         xml_results=xml_results_snapshot,
         extra_output=extra_output_snapshot,
+        output_simplifier=global_options.output_simplifier(),
     )
 
 
