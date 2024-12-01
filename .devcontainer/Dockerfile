@@ -2,7 +2,7 @@ FROM mcr.microsoft.com/devcontainers/rust:1
 
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     # Install prerequisites.
-    && apt-get install --no-install-recommends -y clang libssl-dev protobuf-compiler \
+    && apt-get install --no-install-recommends -y build-essential clang libffi-dev libfuse-dev libssl-dev protobuf-compiler python3-dev \
     # Install `hyperfine` and `dbg` for debugging and benchmarking.
     # See: https://www.pantsbuild.org/stable/docs/contributions/development/debugging-and-benchmarking
     && apt-get install --no-install-recommends -y gdb python3-dbg \

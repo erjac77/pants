@@ -10,9 +10,8 @@ This project provides a *Development Container* (or [Dev Container](https://cont
 
 ## Features
 
-- [Python](https://www.python.org/) 3.9
 - [Rust](https://www.rust-lang.org/) engine and common [Rust] utilities
-- [Docker-in-Docker](https://github.com/devcontainers/features/tree/main/src/docker-in-docker) (DinD)
+- [Python](https://www.python.org/) 3.11
 - [Shell History](https://github.com/stuartleeks/dev-container-features/tree/main/src/shell-history)
 - [Local Git hooks](https://www.pantsbuild.org/stable/docs/contributions/development/setting-up-pants#step-3-set-up-a-pre-push-git-hook)
 - Useful [VS Code] extensions like `Python`, `Pylance`, `Black Formatter`, `rust-analyser`, `Even Better TOML`, etc.
@@ -21,11 +20,10 @@ This project provides a *Development Container* (or [Dev Container](https://cont
 
 ## Getting started
 
-You need three (3) things to get started with development containers:
+You need two (2) things to get started with development containers:
 
 - [VS Code]
-- [Docker](https://www.docker.com/)
-- [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) for [VS Code]
+- [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) extension for [VS Code]
 
 More on getting started can be found [here](https://code.visualstudio.com/docs/devcontainers/containers#_getting-started).
 

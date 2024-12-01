@@ -5,36 +5,42 @@
     "dockerfile": "./Dockerfile"
   },
   "features": {
-    // DinD feature mounts `/tmp` to `tmpfs` by default, limiting the `/tmp` folder
-    // size to the amount of RAM that is available, which results in `Out of space
-    // Exception` when Pants runs. Temporary fix until issue #471 is resolved.
-    // See: https://github.com/devcontainers/features/issues/471
-    "ghcr.io/erjac77/devcontainers-features/docker-in-docker:2": {},
     "ghcr.io/devcontainers/features/python:1": {
-      "version": 3.9
+      "version": "3.11.10"
     },
     "ghcr.io/stuartleeks/dev-container-features/shell-history:0": {}
   },
   "customizations": {
     "vscode": {
-      "settings": {
-        "python.analysis.extraPaths": ["src/python"],
-        "python.formatting.provider": "ms-python.black-formatter",
-        "python.linting.enabled": true,
-        "python.linting.flake8Enabled": true,
-        "python.linting.flake8Args": ["--config=build-support/flake8/.flake8"],
-        "rust-analyzer.linkedProjects": ["src/rust/engine/Cargo.toml"]
-      },
       "extensions": [
         // Installed by the Python feature:
         // "ms-python.python",
         // "ms-python.vscode-pylance",
         // "ms-python.autopep8",
         "ms-python.black-formatter",
-        "vadimcn.vscode-lldb",
+        "ms-python.flake8",
+        "ms-python.mypy-type-checker",
         "rust-lang.rust-analyzer",
+        "vadimcn.vscode-lldb",
         "tamasfe.even-better-toml"
-      ]
+      ],
+      "settings": {
+        "[python]": {
+          "editor.defaultFormatter": "ms-python.black-formatter",
+          "editor.formatOnSave": true
+        },
+        "[rust]": {
+          "editor.defaultFormatter": "rust-lang.rust-analyzer",
+          "editor.formatOnSave": true
+        },
+        "python.analysis.extraPaths": ["src/python"],
+        "black-formatter.args": ["--config=pyproject.toml"],
+        "flake8.args": ["--config=build-support/flake8/.flake8"],
+        "flake8.path": ["dist/export/python/virtualenvs/flake8/3.11.10/bin/flake8"],
+        "mypy-type-checker.args": ["--config-file=pyproject.toml"],
+        "mypy-type-checker.path": ["dist/export/python/virtualenvs/mypy/3.11.10/bin/mypy"],
+        "rust-analyzer.linkedProjects": ["src/rust/engine/Cargo.toml"]
+      }
     }
   },
   "remoteUser": "vscode",
