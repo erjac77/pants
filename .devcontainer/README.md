@@ -12,6 +12,7 @@ This project provides a *Development Container* (or [Dev Container](https://cont
 
 - [Rust](https://www.rust-lang.org/) engine and common [Rust] utilities
 - [Python](https://www.python.org/) 3.11
+- [Docker-in-Docker](https://github.com/devcontainers/features/tree/main/src/docker-in-docker) (DinD)
 - [Shell History](https://github.com/stuartleeks/dev-container-features/tree/main/src/shell-history)
 - [Local Git hooks](https://www.pantsbuild.org/stable/docs/contributions/development/setting-up-pants#step-3-set-up-a-pre-push-git-hook)
 - Useful [VS Code] extensions like `Python`, `Pylance`, `Black Formatter`, `rust-analyser`, `Even Better TOML`, etc.
@@ -20,9 +21,10 @@ This project provides a *Development Container* (or [Dev Container](https://cont
 
 ## Getting started
 
-You need two (2) things to get started with development containers:
+You need three (3) things to get started with development containers:
 
 - [VS Code]
+- [Docker](https://www.docker.com/)
 - [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) extension for [VS Code]
 
 More on getting started can be found [here](https://code.visualstudio.com/docs/devcontainers/containers#_getting-started).
@@ -34,7 +36,7 @@ More on getting started can be found [here](https://code.visualstudio.com/docs/d
 3. After the build completes, [VS Code] will automatically connect to the container. You can now work with the repository source code in this independent environment.
     > [!NOTE]
     > Whenever you rebuild the dev container, you may have to execute the `Developer: Reload Window` command from the *Command Palette...* (`F1`) in order for the `Black Formatter` extension to be recognized by the settings. See: https://github.com/microsoft/vscode/issues/189839.
-4. [Pants] sets up its development virtualenv at `~/.cache/pants/pants_dev_deps/<venv_fingerprint>.venv/`. Point [VS Code] to the `bin/python` file in this folder by running the `Python: Select Interpreter` command from the *Command Palette...* (`F1`), and then `+ Enter interpreter path...`. You may need to restart your *terminal*. See [Configure your IDE (optional)](https://www.pantsbuild.org/docs/contributor-setup#configure-your-ide-optional).
+4. [Pants] sets up its development virtualenv at `~/.cache/pants/pants_dev_deps/<venv_fingerprint>.venv/`. Point [VS Code] to the `bin/python` file in this folder by running the `Python: Select Interpreter` command from the *Command Palette...* (`F1`), and then `Enter interpreter path...`. You may need to restart your *terminal*. See [Configure your IDE (optional)](https://www.pantsbuild.org/docs/contributor-setup#configure-your-ide-optional).
 
 More on starting a dev container can be found [here](https://code.visualstudio.com/docs/devcontainers/containers#_picking-your-quick-start).
 

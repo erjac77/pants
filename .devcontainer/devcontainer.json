@@ -5,6 +5,12 @@
     "dockerfile": "./Dockerfile"
   },
   "features": {
+    // DinD feature mounts `/tmp` to `tmpfs` by default, limiting the `/tmp` folder
+    // size to the amount of RAM that is available, which results in `Out of space
+    // Exception` when Pants runs. Temporary fix until issue #471 is resolved.
+    // See: https://github.com/devcontainers/features/issues/471
+    "ghcr.io/erjac77/devcontainers-features/docker-in-docker:2": {},
+    // "ghcr.io/devcontainers/features/docker-in-docker:2": {},
     "ghcr.io/devcontainers/features/python:1": {
       "version": "3.11.10"
     },
@@ -13,7 +19,8 @@
   "customizations": {
     "vscode": {
       "extensions": [
-        // Installed by the Python feature:
+        // VS Code extensions installed by the Python feature.
+        // See: https://github.com/devcontainers/features/tree/main/src/python#vs-code-extensions
         // "ms-python.python",
         // "ms-python.vscode-pylance",
         // "ms-python.autopep8",
@@ -44,11 +51,6 @@
     }
   },
   "remoteUser": "vscode",
-  // Pants cache directories. No need to mount `$HOME/.cache/nce` (cache directory
-  // used by the Pants launcher binary) since de development workflow invokes Pants
-  // directly from the sources using a different runner script.
-  // See: https://www.pantsbuild.org/stable/docs/using-pants/using-pants-in-ci#directories-to-cache
-  // See: https://www.pantsbuild.org/stable/docs/contributions/development/running-pants-from-sources
   "mounts": [
     {
       "source": "pants-named_caches",
