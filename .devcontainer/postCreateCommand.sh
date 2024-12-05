@@ -17,6 +17,3 @@ pip install py-spy memray
 
 # Bootstrap Pants.
 ./pants --version
-
-# Export resolves used by VS Code extensions.
-./pants export --resolve=flake8 --resolve=mypy
