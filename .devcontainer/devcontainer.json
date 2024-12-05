@@ -19,6 +19,7 @@
         // "ms-python.python",
         // "ms-python.vscode-pylance",
         // "ms-python.autopep8",
+        // Others useful extensions for Python and Rust.
         "ms-python.black-formatter",
         "ms-python.flake8",
         "ms-python.mypy-type-checker",
